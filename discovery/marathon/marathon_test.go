@@ -410,6 +410,80 @@ func TestMarathonSDSendGroupWithPortDefinitions(t *testing.T) {
 	}
 }
 
+func marathonTestAppListWithPortDefinitionsRequirePorts(labels map[string]string, runningTasks int) *AppList {
+	var (
+		task = Task{
+			ID:    "test-task-1",
+			Host:  "mesos-slave1",
+			Ports: []uint32{31000, 32000},
+		}
+		docker = DockerContainer{
+			Image: "repo/image:tag",
+		}
+		container = Container{Docker: docker}
+		app       = App{
+			ID:           "test-service",
+			Tasks:        []Task{task},
+			RunningTasks: runningTasks,
+			Labels:       labels,
+			Container:    container,
+			PortDefinitions: []PortDefinition{
+				{Labels: make(map[string]string), Port: 31000},
+				{Labels: labels, Port: 32000},
+			},
+			RequirePorts: true,
+		}
+	)
+	return &AppList{
+		Apps: []App{app},
+	}
+}
+
+func TestMarathonSDSendGroupWithPortDefinitionsRequirePorts(t *testing.T) {
+	var (
+		ch     = make(chan []*targetgroup.Group, 1)
+		client = func(client *http.Client, url string) (*AppList, error) {
+			return marathonTestAppListWithPortDefinitionsRequirePorts(marathonValidLabel, 1), nil
+		}
+	)
+	if err := testUpdateServices(client, ch); err != nil {
+		t.Fatalf("Got error: %s", err)
+	}
+	select {
+	case tgs := <-ch:
+		tg := tgs[0]
+
+		if tg.Source != "test-service" {
+			t.Fatalf("Wrong target group name: %s", tg.Source)
+		}
+		if len(tg.Targets) != 2 {
+			t.Fatalf("Wrong number of targets: %v", tg.Targets)
+		}
+		tgt := tg.Targets[0]
+		if tgt[model.AddressLabel] != "mesos-slave1:31000" {
+			t.Fatalf("Wrong target address: %s", tgt[model.AddressLabel])
+		}
+		if tgt[model.LabelName(portMappingLabelPrefix+"prometheus")] != "" {
+			t.Fatalf("Wrong first portMappings label from the first port: %s", tgt[model.AddressLabel])
+		}
+		if tgt[model.LabelName(portDefinitionLabelPrefix+"prometheus")] != "" {
+			t.Fatalf("Wrong first portDefinitions label from the first port: %s", tgt[model.AddressLabel])
+		}
+		tgt = tg.Targets[1]
+		if tgt[model.AddressLabel] != "mesos-slave1:32000" {
+			t.Fatalf("Wrong target address: %s", tgt[model.AddressLabel])
+		}
+		if tgt[model.LabelName(portMappingLabelPrefix+"prometheus")] != "" {
+			t.Fatalf("Wrong portMappings label from the second port: %s", tgt[model.AddressLabel])
+		}
+		if tgt[model.LabelName(portDefinitionLabelPrefix+"prometheus")] != "yes" {
+			t.Fatalf("Wrong portDefinitions label from the second port: %s", tgt[model.AddressLabel])
+		}
+	default:
+		t.Fatal("Did not get a target group.")
+	}
+}
+
 func marathonTestAppListWithPorts(labels map[string]string, runningTasks int) *AppList {
 	var (
 		task = Task{
